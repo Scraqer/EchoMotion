@@ -1,0 +1,108 @@
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+BLECharacteristic *pCharacteristic;
+bool czyPolaczony = false;
+
+class MojeCallbacki: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      czyPolaczony = true;
+      Serial.println("Telefon polaczony!");
+    }
+    void onDisconnect(BLEServer* pServer) {
+      czyPolaczony = false;
+      Serial.println("Telefon rozlaczony");
+      pServer->getAdvertising()->start();
+    }
+};
+
+#define LED_PIN  15
+#define REED_PIN 4
+
+RTC_DATA_ATTR int licznikObrotow = 0;   // <-- ZMIANA: RTC_DATA_ATTR sprawia, że ta wartość przetrwa deep sleep
+int laststate = HIGH;
+unsigned long ostatniObrot = 0;
+const unsigned long DEBOUNCE_MS = 50;
+
+// --- NOWE: mechanizm usypiania po bezczynności ---
+unsigned long ostatniaAktywnosc = 0;
+const unsigned long CZAS_BEZCZYNNOSCI_MS = 30000; // 30 sekund bez ruchu = idziemy spac
+
+void setup() {
+  Serial.begin(115200);   // <-- PRZENIESIONE na góre, żeby wszystkie println działały
+  delay(500);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(REED_PIN, INPUT_PULLUP);
+
+  // sprawdzamy czy budzimy sie z deep sleep, czy to pierwsze uruchomienie
+  esp_sleep_wakeup_cause_t powod = esp_sleep_get_wakeup_cause();
+  if (powod == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println("Obudzony sygnalem z kontaktronu.");
+  } else {
+    Serial.println("Pierwsze uruchomienie / reset.");
+  }
+
+  ostatniaAktywnosc = millis(); // liczymy czas bezczynnosci od teraz
+
+  // --- Inicjalizacja BLE ---
+  BLEDevice::init("Kolo-Chomika");
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MojeCallbacki());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ |
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  pCharacteristic->addDescriptor(new BLE2902());
+
+  pService->start();
+  pServer->getAdvertising()->start();
+  Serial.println("BLE gotowe, czekam na polaczenie...");
+}
+
+void loop() {
+  int state = digitalRead(REED_PIN);
+  digitalWrite(LED_PIN, state == LOW ? HIGH : LOW);
+
+  if (state != laststate) {
+    unsigned long teraz = millis();
+    if (teraz - ostatniObrot > DEBOUNCE_MS) {
+      if (state == HIGH) {
+        licznikObrotow++;
+        ostatniObrot = teraz;
+        ostatniaAktywnosc = teraz;   // <-- NOWE: byl ruch, resetujemy licznik bezczynnosci
+        Serial.print("Obrot nr: ");
+        Serial.println(licznikObrotow);
+
+        if (czyPolaczony) {
+          String wartosc = String(licznikObrotow);
+          pCharacteristic->setValue(wartosc.c_str());
+          pCharacteristic->notify();
+        }
+      }
+      ostatniObrot = teraz;
+      laststate = state;
+    }
+  }
+
+  // --- NOWE: sprawdzamy czy pora spac ---
+  // usypiamy tylko gdy kontaktron jest w spoczynku (HIGH, magnesu nie ma)
+  // i minelo wystarczajaco duzo czasu bez zadnego obrotu
+  if (state == HIGH && (millis() - ostatniaAktywnosc > CZAS_BEZCZYNNOSCI_MS)) {
+    Serial.println("Brak ruchu - usypiam...");
+    delay(100); // czas zeby Serial zdazyl wyslac tekst
+
+    esp_sleep_enable_ext1_wakeup(1ULL << REED_PIN, ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_deep_sleep_start();
+    // po tej linijce program sie zatrzymuje - budzenie = powrot do setup()
+  }
+}
