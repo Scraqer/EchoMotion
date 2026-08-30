@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLE Monitor</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --accent: #4da3ff;
+  --accent-dim: #2c6cad;
+  --text: #e9edf2;
+  --text-dim: #8892a0;
+  --ok: #37c977;
+  --off: #e5484d;
+  --border: #262b35;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.dot-off { background: var(--off); }
+.dot-on { background: var(--ok); }
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.value-panel {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 20px;
+  text-align: center;
+  margin-top: 8px;
+}
+
+.value-label {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.value-big {
+  font-size: clamp(32px, 10vw, 56px);
+  font-weight: 700;
+  word-break: break-all;
+  line-height: 1.15;
+}
+
+.value-raw {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.chart-panel {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  height: 220px;
+}
+
+.config-panel {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 16px;
+}
+
+.config-panel summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.config-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.config-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.config-grid input {
+  background: #0d0f14;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0 0 12px;
+}
+
+.controls {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+}
+
+button {
+  flex: 1;
+  padding: 14px;
+  border-radius: 10px;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#connectBtn {
+  background: var(--accent);
+  color: #051022;
+}
+#connectBtn:disabled {
+  background: var(--accent-dim);
+  cursor: default;
+}
+
+#disconnectBtn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+#disconnectBtn:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+#simulateBtn {
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--accent-dim);
+  color: var(--accent);
+}
+#simulateBtn.active {
+  background: var(--accent);
+  color: #051022;
+  border-style: solid;
+}
+
+.log-panel {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.log-header {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+#log {
+  margin: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <header class="topbar">
+    <span id="statusDot" class="dot dot-off"></span>
+    <span id="statusText">Rozłączono</span>
+  </header>
+
+  <main class="main">
+
+    <section class="value-panel">
+      <div class="value-label" id="valueLabel">Ostatnia wartość</div>
+      <div class="value-big" id="valueBig">—</div>
+      <div class="value-raw" id="valueRaw"></div>
+    </section>
+
+    <section class="chart-panel">
+      <canvas id="liveChart"></canvas>
+    </section>
+
+    <section class="config-panel">
+      <details>
+        <summary>Konfiguracja połączenia BLE</summary>
+        <div class="config-grid">
+          <label>
+            Service UUID
+            <input type="text" id="serviceUuid" value="4fafc201-1fb5-459e-8fcc-c5c9c331914b">
+          </label>
+          <label>
+            Characteristic UUID
+            <input type="text" id="charUuid" value="beb5483f-36e1-4688-b7f5-ea07361b26a8">
+          </label>
+        </div>
+        <p class="hint">
+          Domyślne wartości pasują do przykładowego szkicu
+          <code>firmware/firebeetle_c6_ble_server.ino</code>. Wyczyść pola,
+          jeśli chcesz, żeby aplikacja sama wylistowała dostępne serwisy
+          Twojego urządzenia w logu poniżej.
+        </p>
+      </details>
+    </section>
+
+    <section class="controls">
+      <button id="connectBtn">Połącz przez Bluetooth</button>
+      <button id="disconnectBtn" disabled>Rozłącz</button>
+    </section>
+
+    <section class="controls">
+      <button id="simulateBtn">▶ Symuluj dane (bez BLE)</button>
+    </section>
+
+    <section class="log-panel">
+      <div class="log-header">Log</div>
+      <pre id="log"></pre>
+    </section>
+
+  </main>
+
+  <script>
+// ==========================================================
+// BLE Monitor - szkielet
+// Web Bluetooth API - działa w Chrome/Edge na Androidzie i desktopie,
+// oraz w przeglądarce Bluefy na iOS (Safari sam z siebie NIE obsługuje
+// Web Bluetooth).
+// ==========================================================
+
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const valueBig = document.getElementById('valueBig');
+const valueLabel = document.getElementById('valueLabel');
+const valueRaw = document.getElementById('valueRaw');
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const serviceUuidInput = document.getElementById('serviceUuid');
+const charUuidInput = document.getElementById('charUuid');
+const logEl = document.getElementById('log');
+
+let device = null;
+let server = null;
+let characteristic = null;
+
+// -------- Chart.js (miejsce na przyszłą logikę / wykresy) --------
+const chartData = {
+  labels: [],
+  datasets: [{
+    label: 'Wartość',
+    data: [],
+    borderColor: '#4da3ff',
+    backgroundColor: 'rgba(77,163,255,0.15)',
+    tension: 0.25,
+    pointRadius: 0,
+  }]
+};
+
+let chart = null;
+if (typeof Chart !== 'undefined') {
+  chart = new Chart(document.getElementById('liveChart'), {
+    type: 'line',
+    data: chartData,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#8892a0' }, grid: { color: '#262b35' } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+} else {
+  console.warn('Chart.js nie załadował się (brak internetu / plik otwarty jako file://). Wykres będzie wyłączony, reszta apki działa normalnie.');
+}
+
+const MAX_POINTS = 60;
+
+function pushChartPoint(value) {
+  if (!chart) return; // Chart.js niedostępne - pomijamy, reszta apki działa dalej
+  const num = Number(value);
+  if (Number.isNaN(num)) return; // wykres tylko dla wartości liczbowych
+  const now = new Date();
+  chartData.labels.push(now.toLocaleTimeString());
+  chartData.datasets[0].data.push(num);
+  if (chartData.labels.length > MAX_POINTS) {
+    chartData.labels.shift();
+    chartData.datasets[0].data.shift();
+  }
+  chart.update('none');
+}
+
+// -------- Logowanie na ekranie (przydatne na telefonie, bez konsoli) --------
+function log(msg) {
+  const time = new Date().toLocaleTimeString();
+  logEl.textContent += `[${time}] ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+}
+
+// -------- UI stanu połączenia --------
+function setConnectedUI(isConnected) {
+  statusDot.className = 'dot ' + (isConnected ? 'dot-on' : 'dot-off');
+  statusText.textContent = isConnected ? 'Połączono' : 'Rozłączono';
+  connectBtn.disabled = isConnected;
+  disconnectBtn.disabled = !isConnected;
+}
+
+// -------- Wspólna ścieżka wyświetlania (używana przez BLE i symulację) --------
+function showValue(text, hexOrTag) {
+  valueBig.textContent = text || '(pusto)';
+  valueRaw.textContent = hexOrTag ? `HEX: ${hexOrTag}` : '(symulacja)';
+  pushChartPoint(text.trim());
+}
+
+// -------- Odbiór danych (prawdziwy BLE) --------
+function handleCharacteristicValueChanged(event) {
+  const dv = event.target.value; // DataView
+
+  // Surowe bajty (hex) - przyda się do debugowania protokołu urządzenia
+  const bytes = [];
+  for (let i = 0; i < dv.byteLength; i++) {
+    bytes.push(dv.getUint8(i).toString(16).padStart(2, '0'));
+  }
+  const hex = bytes.join(' ');
+
+  // Próba odczytu jako tekst UTF-8 (typowe dla modułów typu HC-05/ESP32 w trybie tekstowym)
+  let text = '';
+  try {
+    text = new TextDecoder('utf-8').decode(dv);
+  } catch (e) {
+    text = '';
+  }
+
+  const displayValue = text && /[\x20-\x7E]/.test(text) ? text.trim() : hex;
+
+  showValue(displayValue, hex);
+  log(`Odebrano: "${text.trim()}" | hex: ${hex}`);
+}
+
+// -------- Symulacja (bez BLE, do developmentu UI/logiki/wykresów) --------
+const simulateBtn = document.getElementById('simulateBtn');
+let simulateInterval = null;
+
+function toggleSimulate() {
+  if (simulateInterval) {
+    clearInterval(simulateInterval);
+    simulateInterval = null;
+    simulateBtn.classList.remove('active');
+    simulateBtn.textContent = '▶ Symuluj dane (bez BLE)';
+    log('Symulacja zatrzymana.');
+    return;
+  }
+
+  simulateBtn.classList.add('active');
+  simulateBtn.textContent = '■ Zatrzymaj symulację';
+  log('Symulacja uruchomiona (fejkowe dane co 1s).');
+
+  simulateInterval = setInterval(() => {
+    // fejkowa wartość liczbowa 0.0 - 100.0, tak jak w firmware .ino
+    const fake = (Math.random() * 100).toFixed(1);
+    showValue(fake, null);
+    log(`[SYM] wygenerowano: ${fake}`);
+  }, 1000);
+}
+
+simulateBtn.addEventListener('click', toggleSimulate);
+
+// -------- Połączenie --------
+async function connect() {
+  if (!navigator.bluetooth) {
+    log('Ta przeglądarka nie obsługuje Web Bluetooth. Użyj Chrome (Android) lub Bluefy (iOS).');
+    alert('Web Bluetooth nie jest tu dostępne. Na iPhone użyj przeglądarki Bluefy.');
+    return;
+  }
+
+  const serviceUuid = serviceUuidInput.value.trim();
+  const charUuid = charUuidInput.value.trim();
+
+  try {
+    log('Szukam urządzeń...');
+
+    const requestOptions = {
+      acceptAllDevices: true,
+      optionalServices: serviceUuid ? [serviceUuid] : []
+    };
+
+    device = await navigator.bluetooth.requestDevice(requestOptions);
+    log(`Wybrano urządzenie: ${device.name || '(bez nazwy)'}`);
+
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    server = await device.gatt.connect();
+    log('Połączono z GATT server.');
+
+    if (serviceUuid && charUuid) {
+      // Znamy dokładnie serwis i charakterystykę - podłączamy się bezpośrednio
+      const service = await server.getPrimaryService(serviceUuid);
+      characteristic = await service.getCharacteristic(charUuid);
+
+      await characteristic.startNotifications();
+      characteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+
+      valueLabel.textContent = 'Ostatnia wartość';
+      log('Subskrypcja powiadomień aktywna.');
+    } else {
+      // Nie znamy UUID - listujemy dostępne serwisy, żeby je odczytać z logu
+      log('Brak podanego Service/Characteristic UUID - listuję dostępne serwisy...');
+      const services = await server.getPrimaryServices();
+      for (const service of services) {
+        log(`Serwis: ${service.uuid}`);
+        const chars = await service.getCharacteristics();
+        for (const c of chars) {
+          log(`  ↳ Charakterystyka: ${c.uuid} | notify: ${c.properties.notify}`);
+        }
+      }
+      log('Wpisz właściwy Service/Characteristic UUID powyżej i połącz ponownie.');
+    }
+
+    setConnectedUI(true);
+
+  } catch (err) {
+    log('Błąd: ' + err.message);
+    setConnectedUI(false);
+  }
+}
+
+function onDisconnected() {
+  log('Urządzenie rozłączone.');
+  setConnectedUI(false);
+}
+
+async function disconnect() {
+  if (characteristic) {
+    try {
+      await characteristic.stopNotifications();
+      characteristic.removeEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+    } catch (e) { /* ignore */ }
+  }
+  if (device && device.gatt.connected) {
+    device.gatt.disconnect();
+  }
+  setConnectedUI(false);
+}
+
+connectBtn.addEventListener('click', connect);
+disconnectBtn.addEventListener('click', disconnect);
+
+if (!navigator.bluetooth) {
+  log('Uwaga: navigator.bluetooth niedostępne w tej przeglądarce/kontekście (wymaga HTTPS lub localhost).');
+}
+
+</script>
+</body>
+</html>
