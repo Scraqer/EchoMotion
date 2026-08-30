@@ -1,0 +1,128 @@
+#include <NimBLEDevice.h>
+
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+#define LED_PIN      15
+#define REED_PIN     4   // Pin kontaktronu
+#define BATTERY_PIN  0   // Pin pomiaru baterii
+
+NimBLECharacteristic *pCharacteristic;
+bool czyPolaczony = false;
+
+int licznikObrotow = 0;
+int ostatnioWyslaneObroty = -1;
+
+int laststate = HIGH;
+unsigned long ostatniObrot = 0;
+const unsigned long DEBOUNCE_MS = 50;
+
+unsigned long ostatniaWysylka = 0;
+const unsigned long INTERWAL_WYSYLKI_MS = 30000; // Co 30 sekund
+
+const int LICZBA_PROBEK_ADC = 16;
+
+// Poprawione callbacki dostosowane do NimBLE v2.x
+class MojeCallbacki: public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
+      czyPolaczony = true;
+      Serial.println("Telefon polaczony ze strona WWW!");
+    }
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
+      czyPolaczony = false;
+      Serial.println("Telefon rozlaczony - wznawiam rozglaszanie...");
+      NimBLEDevice::startAdvertising();
+    }
+};
+
+float odczytajNapiecieBaterii() {
+  long sumaMiliVolt = 0;
+  for (int i = 0; i < LICZBA_PROBEK_ADC; i++) {
+    sumaMiliVolt += analogReadMilliVolts(BATTERY_PIN);
+    delayMicroseconds(200);
+  }
+  float avgMiliVolt = sumaMiliVolt / (float)LICZBA_PROBEK_ADC;
+  return (avgMiliVolt * 2.0) / 1000.0;
+}
+
+int przeliczNaProcenty(float napiecie) {
+  int procent = map(napiecie * 100, 330, 420, 0, 100);
+  return constrain(procent, 0, 100);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(REED_PIN, INPUT_PULLUP);
+
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
+  Serial.println("Start NimBLE...");
+
+  NimBLEDevice::init("Kolo-Chomika");
+  NimBLEServer *pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new MojeCallbacki());
+
+  NimBLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+                    );
+
+  pService->start();
+
+  // Konfiguracja rozgłaszania NimBLE 2.x
+  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->start();
+
+  Serial.println("BLE gotowe i widoczne pod Web Bluetooth!");
+  ostatniaWysylka = millis();
+}
+
+void loop() {
+  // 1. Zliczanie obrotów w czasie rzeczywistym
+  int state = digitalRead(REED_PIN);
+  digitalWrite(LED_PIN, state == LOW ? HIGH : LOW);
+
+  if (state != laststate) {
+    unsigned long teraz = millis();
+    if (teraz - ostatniObrot > DEBOUNCE_MS) {
+      if (state == HIGH) {
+        licznikObrotow++;
+        Serial.print("Obrocono kolo. Suma: ");
+        Serial.println(licznikObrotow);
+      }
+      ostatniObrot = teraz;
+      laststate = state;
+    }
+  }
+
+  // 2. Wysyłanie paczki danych co 30 sekund – TYLKO przy nowym ruchu
+  unsigned long teraz = millis();
+  if (teraz - ostatniaWysylka >= INTERWAL_WYSYLKI_MS) {
+    ostatniaWysylka = teraz;
+
+    if (licznikObrotow != ostatnioWyslaneObroty) {
+      ostatnioWyslaneObroty = licznikObrotow;
+
+      float napiecie = odczytajNapiecieBaterii();
+      int poziomProcent = przeliczNaProcenty(napiecie);
+
+      String dane = "Obroty: " + String(licznikObrotow) + 
+                    " | Bat: " + String(poziomProcent) + 
+                    "% (" + String(napiecie, 2) + "V)";
+
+      Serial.print("--- Wysylanie danych do strony: ");
+      Serial.println(dane);
+
+      if (czyPolaczony) {
+        pCharacteristic->setValue(dane);
+        pCharacteristic->notify();
+      }
+    }
+  }
+}
