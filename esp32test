@@ -1,0 +1,23 @@
+#define LED_PIN  15
+#define REED_PIN 4   // Pin dla kontaktronu
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(REED_PIN, INPUT_PULLUP);
+
+void loop() {
+  int state = digitalRead(REED_PIN);
+
+  // Po przyłożeniu magnesu kontaktron zwiera do GND (stan LOW)
+  if (state == LOW) {
+    digitalWrite(LED_PIN, HIGH); // Włącz diodę na pinie 15
+    Serial.println("Magnes blisko -> Dioda SWIECI");
+  } else {
+    digitalWrite(LED_PIN, LOW);  // Wyłącz diodę
+    Serial.println("Brak magnesu -> Dioda ZGASZONA");
+  }
+
+  delay(100);
+}
